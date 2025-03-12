@@ -1,15 +1,14 @@
 import pandas as pd
-import aiohttp
-import asyncio
+import requests
+import json
 import time
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
 # 配置
 CSV_FILE = "TruthfulQA.csv"
-API_URL = "http://127.0.0.1:11434/api/generate"
+API_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "deepseek-r1:32b"
-CONCURRENT_REQUESTS = 20  # 并发请求数量
 
 # 加载数据
 df = pd.read_csv(CSV_FILE, sep='\t')
@@ -25,51 +24,45 @@ remapped_output_tokens = 0
 
 start_time = time.time()
 
-async def fetch(session, question):
-    global success_count, total_input_tokens, total_output_tokens, remapped_output_tokens
 
+
+# 遍历数据集请求
+for idx, row in tqdm(df.iterrows(), total=len(df)):
+    
+    
+    question = row["Question"]
+    
     # 计算输入 token 数量
     input_tokens = len(tokenizer.encode(question))
     total_input_tokens += input_tokens
-
+    
     payload = {
         "model": MODEL_NAME,
         "prompt": question,
         "stream": False
     }
-
+    
     try:
-        async with session.post(API_URL, json=payload, timeout=30) as response:
-            response.raise_for_status()
-            data = await response.json()
-            model_answer = data.get("response", "").strip()
-
-            # 成功请求
-            success_count += 1
-
-            # 模型输出 tokens 计算
-            output_tokens = len(model_answer.split())  # 简单词计数
-            total_output_tokens += output_tokens
-
-            # 重标记后的 token 统计
-            remapped_tokens = len(tokenizer.encode(model_answer))
-            remapped_output_tokens += remapped_tokens
-
+        response = requests.post(API_URL, data=json.dumps(payload), timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        model_answer = data.get("response", "").strip()
+        
+        # 成功请求
+        success_count += 1
+        
+        # 模型输出 tokens 计算
+        output_tokens = len(model_answer.split())  # 简单词计数
+        total_output_tokens += output_tokens
+        
+        # 重标记后的 token 统计
+        remapped_tokens = len(tokenizer.encode(model_answer))
+        remapped_output_tokens += remapped_tokens
+        
     except Exception as e:
-        print(f"[失败] 请求异常: {e}")
-
-async def main():
-    connector = aiohttp.TCPConnector(limit=CONCURRENT_REQUESTS)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = []
-        for idx, row in df.iterrows():
-            question = row["Question"]
-            task = fetch(session, question)
-            tasks.append(task)
-        await asyncio.gather(*tasks)
-
-# 运行异步主函数
-asyncio.run(main())
+        print(f"[失败] 第 {idx+1} 个问题 请求异常: {e}")
+        continue
 
 end_time = time.time()
 elapsed_time = end_time - start_time
